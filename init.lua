@@ -1,3 +1,5 @@
+hs.window.animationDuration = 0
+
 --  CONFIG  ------------------------------------------------
 ------------------------------------------------------------
 local hs_app = require "hs.application"
@@ -85,66 +87,70 @@ _G.minimizedStack = _G.minimizedStack or {} -- keep only one copy
 
 local GLOBAL_SHORTCUTS = {
   -- Cmd‑Shift‑Down  → minimise front window, reveal first other‑app window
-  {
-    mods        = { "cmd", "shift" },
-    key         = "down",
-    action      = function(_, isDown)
-      if not isDown then return end
+  ----------------------------------------------------------------------
+-- Cmd-Shift-Down → HIDE window + reveal next app window
+----------------------------------------------------------------------
 
-      local front = hs.window.frontmostWindow()
-      if not front then return end
-      local frontApp = front:application():bundleID()
+{
+  mods = { "cmd", "shift" },
+  key  = "down",
+  action = function(_, isDown)
+    if not isDown then return end
 
-      -- find the first non‑minimised window from *another* app
-      local fallback = nil
-      for _, w in ipairs(hs.window.orderedWindows()) do
-        if w:id() ~= front:id()
-            and not w:isMinimized()
-            and (w:application():bundleID() ~= frontApp) then
-          fallback = w
-          break
-        end
+    local front = hs.window.frontmostWindow()
+    if not front then return end
+    local frontApp = front:application()
+
+    -- store window id so we can restore later
+    _G.minimizedStack = _G.minimizedStack or {}
+    table.insert(_G.minimizedStack, front)
+
+    -- INSTANT hide (no macOS animation)
+    frontApp:hide()
+
+    -- focus next window from other apps
+    local fallback = nil
+    for _, w in ipairs(hs.window.orderedWindows()) do
+      if w:application() ~= frontApp and not w:application():isHidden() then
+        fallback = w
+        break
       end
+    end
 
-      -- push to stack and minimise
-      _G.minimizedStack = _G.minimizedStack or {}
-      table.insert(_G.minimizedStack, front:id())
-      front:minimize()
+    if fallback then
+      fallback:focus()
+    end
+  end,
+  description = "Hide window and reveal next app window",
+},
 
-      -- after the system finishes its own focus shuffle (~0.25 s), bring fallback forward
-      if fallback then
-        hs.timer.doAfter(0.3, function()
-          if fallback and not fallback:isMinimized() then
-            fallback:focus()
-          end
-        end)
+----------------------------------------------------------------------
+-- Cmd-Shift-Up → RESTORE last hidden window instantly
+----------------------------------------------------------------------
+
+{
+  mods = { "cmd", "shift" },
+  key  = "up",
+  action = function(_, isDown)
+    if not isDown then return end
+
+    _G.minimizedStack = _G.minimizedStack or {}
+
+    while #_G.minimizedStack > 0 do
+      local w = table.remove(_G.minimizedStack) -- last pushed
+      local app = w and w:application()
+      if app then
+        app:unhide()   -- INSTANT
+        w:focus()      -- bring the window back
+        return
       end
-    end,
-    description = "Minimise window and reveal first other‑app window behind",
-  },
+    end
 
-  -------- restore (Cmd-Shift-Up) --------------------------
-  {
-    mods        = { "cmd", "shift" },
-    key         = "up",
-    action      = function(_, isDown)
-      if not isDown then return end
+    hs.alert.show("No hidden windows")
+  end,
+  description = "Instant restore of last hidden window",
+},
 
-      while #_G.minimizedStack > 0 do
-        local id  = table.remove(_G.minimizedStack) -- pop
-        local win = hs.window.get(id)
-        if win and win:isMinimized() then
-          win:unminimize()
-          win:focus()
-          return
-        end
-        -- if win no longer exists or was restored some other way, keep popping
-      end
-
-      hs.alert.show("No minimised windows")
-    end,
-    description = "Restore most-recent minimised window",
-  },
 } -- <<<--- keep this closing brace, nothing after it
 
 
@@ -173,6 +179,7 @@ local SHORTCUTS = {
   { mods = { "ctrl" },          key = "right",         sendMods = { "alt" },          keyOut = "right" },
 
   { mods = { "ctrl", "shift" }, key = "r",             sendMods = { "cmd", "shift" }, keyOut = "r" },
+  { mods = { "ctrl", "shift" }, key = "t",             sendMods = { "cmd", "shift" }, keyOut = "t" },
   { mods = { "ctrl", "shift" }, key = "e",             sendMods = { "cmd", "alt" },   keyOut = "e" },
   { mods = { "ctrl", "shift" }, key = "c",             sendMods = { "cmd", "alt" },   keyOut = "c" },
   { mods = { "ctrl", "shift" }, key = "k",             sendMods = { "cmd", "alt" },   keyOut = "k" },
@@ -196,7 +203,7 @@ local APP_SHORTCUTS = {
 ------------------------------------------------------------
 --  DEBUG LOGGER  -----------------------------------------
 ------------------------------------------------------------
-local DEBUG = false -- Set to true only when troubleshooting
+local DEBUG = true -- Set to true only when troubleshooting
 local keyEventsLogger = hs_logger.new('keyEvents', 'debug')
 
 local function logKeyEvent(e, message, appName, bundleID)
@@ -458,10 +465,12 @@ _G.myActiveTaps.scrollTap = hs_eventtap.new({ hs_eventtap.event.types.scrollWhee
   local flags = e:getFlags()
   local dy = e:getProperty(hs_eventtap.event.properties.scrollWheelEventDeltaAxis1)
 
-  if flags.ctrl then -- Only check for ctrl key, other modifiers must not be pressed for these specific scroll remaps
+  -- Only remap if LEFT Ctrl is down (not right Ctrl)
+  -- This allows right Ctrl (fn/globe) + scroll to work natively in web apps like Figma
+  if flags.ctrl and _G.leftCtrlDown and not _G.rightCtrlDown then
     local scrollDirection = dy > 0 and "up" or dy < 0 and "down" or nil
     if scrollDirection then
-      for _, shortcut in ipairs(SHORTCUTS) do -- Using SHORTCUTS table for scroll definitions
+      for _, shortcut in ipairs(SHORTCUTS) do
         if shortcut.scroll and shortcut.scroll == scrollDirection and flagsEqual(flags, shortcut.mods or {}) then
           if DEBUG then
             keyEventsLogger:d("scrollTap: Scroll remap: Ctrl+Scroll" ..
@@ -471,11 +480,11 @@ _G.myActiveTaps.scrollTap = hs_eventtap.new({ hs_eventtap.event.types.scrollWhee
               "+" .. shortcut.keyOut .. ". App: " .. appName .. " (" .. bundleID .. ")")
           end
           if shortcut.sendMods and shortcut.keyOut then
-            hs_eventtap.keyStroke(shortcut.sendMods, shortcut.keyOut, 0) -- keyStroke for zoom is usually fine
+            hs_eventtap.keyStroke(shortcut.sendMods, shortcut.keyOut, 0)
           elseif shortcut.action then
             shortcut.action()
           end
-          return true -- Consume the scroll event
+          return true
         end
       end
     end
@@ -487,6 +496,127 @@ _G.myActiveTaps.scrollTap = hs_eventtap.new({ hs_eventtap.event.types.scrollWhee
   end
   return false
 end)
+
+
+----------------------------------------------------------------------
+-- WINDOW MOVEMENT / RESIZING  (Instant, no animations)
+----------------------------------------------------------------------
+
+hs.window.animationDuration = 0
+
+local win    = hs.window
+local screen = hs.screen
+
+----------------------------------------------------------------------
+-- ORDERED SCREENS (left → right, then top → bottom)
+----------------------------------------------------------------------
+
+local function orderedScreens()
+  local screens = screen.allScreens()
+  table.sort(screens, function(a, b)
+    local af = a:frame()
+    local bf = b:frame()
+    if af.x == bf.x then
+      return af.y < bf.y
+    else
+      return af.x < bf.x
+    end
+  end)
+  return screens
+end
+
+----------------------------------------------------------------------
+-- CYCLE SCREEN (ignores macOS adjacency, just cycles list)
+----------------------------------------------------------------------
+
+local function cycleScreen(direction)
+  local w = win.frontmostWindow()
+  if not w then return end
+
+  local screens = orderedScreens()
+  local current = w:screen()
+
+  local currentIndex = nil
+  for i, s in ipairs(screens) do
+    if s == current then
+      currentIndex = i
+      break
+    end
+  end
+  if not currentIndex then return end
+
+  local count = #screens
+  local destIndex
+  if direction == "right" then
+    destIndex = (currentIndex % count) + 1        -- forward wrap
+  else
+    destIndex = ((currentIndex - 2) % count) + 1  -- backward wrap
+  end
+
+  local dest = screens[destIndex]
+  if not dest then return end
+
+  -- instant move to other screen
+  w:moveToScreen(dest, false, false)
+end
+
+----------------------------------------------------------------------
+-- GEOMETRY MOVEMENT (tiling, instant)
+----------------------------------------------------------------------
+
+local function moveToGeometry(geom)
+  local w = win.frontmostWindow()
+  if not w then return end
+
+  local s = w:screen():frame()
+  local target
+
+  if geom == "left" then
+    target = { x = s.x,           y = s.y,           w = s.w / 2, h = s.h }
+  elseif geom == "right" then
+    target = { x = s.x + s.w / 2, y = s.y,           w = s.w / 2, h = s.h }
+  elseif geom == "bottom" then
+    target = { x = s.x,           y = s.y + s.h / 2, w = s.w,     h = s.h / 2 }
+  elseif geom == "max" then
+    target = s
+  else
+    return
+  end
+
+  w:setFrame(target, 0) -- instant resize
+end
+
+----------------------------------------------------------------------
+-- KEYBINDS
+----------------------------------------------------------------------
+
+-- Cmd+Shift+Left/Right: cycle monitors
+hs.hotkey.bind({ "cmd", "shift" }, "right", function()
+  cycleScreen("right")
+end)
+
+hs.hotkey.bind({ "cmd", "shift" }, "left", function()
+  cycleScreen("left")
+end)
+
+-- Cmd+Arrow: tiling
+hs.hotkey.bind({ "cmd" }, "left", function()
+  moveToGeometry("left")
+end)
+
+hs.hotkey.bind({ "cmd" }, "right", function()
+  moveToGeometry("right")
+end)
+
+hs.hotkey.bind({ "cmd" }, "down", function()
+  moveToGeometry("bottom")
+end)
+
+hs.hotkey.bind({ "cmd" }, "up", function()
+  moveToGeometry("max")
+end)
+
+
 
 ------------------------------------------------------------
 --  START TAPS & WATCHER  ----------------------------------
