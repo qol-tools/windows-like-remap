@@ -556,9 +556,30 @@ local function cycleScreen(direction)
   local dest = screens[destIndex]
   if not dest then return end
 
-  -- instant move to other screen
-  w:moveToScreen(dest, false, false)
+  w:moveToScreen(dest, false, false) -- instant
 end
+
+----------------------------------------------------------------------
+-- DETECT CENTERED WINDOW (for special left/right behavior)
+----------------------------------------------------------------------
+
+local function isCenteredWindow(w)
+  local f = w:frame()
+  local s = w:screen():frame()
+
+  local hRatio = f.h / s.h
+
+  -- window center vs screen center
+  local fCenterX = f.x + f.w / 2
+  local sCenterX = s.x + s.w / 2
+  local xDelta   = math.abs(fCenterX - sCenterX)
+
+  -- treat as centered only if:
+  -- - height is clearly less than full
+  -- - horizontally centered (within 20px)
+  return (hRatio < 0.9) and (xDelta < 20)
+end
+
 
 ----------------------------------------------------------------------
 -- GEOMETRY MOVEMENT (tiling, instant)
@@ -569,28 +590,67 @@ local function moveToGeometry(geom)
   if not w then return end
 
   local s = w:screen():frame()
+  local f = w:frame()
   local target
 
   if geom == "left" then
-    target = { x = s.x,           y = s.y,           w = s.w / 2, h = s.h }
+    if isCenteredWindow(w) then
+      -- first press from centered: preserve height
+      target = {
+        x = s.x,
+        y = f.y,
+        w = s.w / 2,
+        h = f.h,
+      }
+    else
+      -- second press: full-height left tile
+      target = { x = s.x, y = s.y, w = s.w / 2, h = s.h }
+    end
+
   elseif geom == "right" then
-    target = { x = s.x + s.w / 2, y = s.y,           w = s.w / 2, h = s.h }
+    if isCenteredWindow(w) then
+      -- first press from centered: preserve height
+      target = {
+        x = s.x + s.w / 2,
+        y = f.y,
+        w = s.w / 2,
+        h = f.h,
+      }
+    else
+      -- second press: full-height right tile
+      target = { x = s.x + s.w / 2, y = s.y, w = s.w / 2, h = s.h }
+    end
+
   elseif geom == "bottom" then
-    target = { x = s.x,           y = s.y + s.h / 2, w = s.w,     h = s.h / 2 }
+    target = { x = s.x, y = s.y + s.h / 2, w = s.w, h = s.h / 2 }
+
   elseif geom == "max" then
     target = s
+
+  elseif geom == "centered" then
+    local scale = 0.5
+    local wSize = s.w * scale * 0.8
+    local hSize = s.h * scale
+
+    target = {
+      x = s.x + (s.w - wSize) / 2,
+      y = s.y + (s.h - hSize) / 2,
+      w = wSize,
+      h = hSize,
+    }
+
   else
     return
   end
 
-  w:setFrame(target, 0) -- instant resize
+  w:setFrame(target, 0) -- instant
 end
+
 
 ----------------------------------------------------------------------
 -- KEYBINDS
 ----------------------------------------------------------------------
 
--- Cmd+Shift+Left/Right: cycle monitors
 hs.hotkey.bind({ "cmd", "shift" }, "right", function()
   cycleScreen("right")
 end)
@@ -599,7 +659,6 @@ hs.hotkey.bind({ "cmd", "shift" }, "left", function()
   cycleScreen("left")
 end)
 
--- Cmd+Arrow: tiling
 hs.hotkey.bind({ "cmd" }, "left", function()
   moveToGeometry("left")
 end)
@@ -609,13 +668,12 @@ hs.hotkey.bind({ "cmd" }, "right", function()
 end)
 
 hs.hotkey.bind({ "cmd" }, "down", function()
-  moveToGeometry("bottom")
+  moveToGeometry("centered")
 end)
 
 hs.hotkey.bind({ "cmd" }, "up", function()
   moveToGeometry("max")
 end)
-
 
 
 ------------------------------------------------------------
