@@ -55,9 +55,9 @@ _G.kittyFastTap = hs.eventtap.new(
       return false -- not Kitty -> pass through
     end
 
-    local isDown = (e:getType() == hs.eventtap.event.types.keyDown)
-    local flags  = e:getFlags()
-    local key    = hs.keycodes.map[e:getKeyCode()]
+    local isDown   = (e:getType() == hs.eventtap.event.types.keyDown)
+    local flags    = e:getFlags()
+    local key      = hs.keycodes.map[e:getKeyCode()]
 
     -- Only Ctrl (no cmd/alt/shift)
     local onlyCtrl = flags.ctrl and not (flags.cmd or flags.alt or flags.shift)
@@ -88,68 +88,68 @@ _G.minimizedStack = _G.minimizedStack or {} -- keep only one copy
 local GLOBAL_SHORTCUTS = {
   -- Cmd‑Shift‑Down  → minimise front window, reveal first other‑app window
   ----------------------------------------------------------------------
--- Cmd-Shift-Down → HIDE window + reveal next app window
-----------------------------------------------------------------------
+  -- Cmd-Shift-Down → HIDE window + reveal next app window
+  ----------------------------------------------------------------------
 
-{
-  mods = { "cmd", "shift" },
-  key  = "down",
-  action = function(_, isDown)
-    if not isDown then return end
+  {
+    mods        = { "cmd", "shift" },
+    key         = "down",
+    action      = function(_, isDown)
+      if not isDown then return end
 
-    local front = hs.window.frontmostWindow()
-    if not front then return end
-    local frontApp = front:application()
+      local front = hs.window.frontmostWindow()
+      if not front then return end
+      local frontApp = front:application()
 
-    -- store window id so we can restore later
-    _G.minimizedStack = _G.minimizedStack or {}
-    table.insert(_G.minimizedStack, front)
+      -- store window id so we can restore later
+      _G.minimizedStack = _G.minimizedStack or {}
+      table.insert(_G.minimizedStack, front)
 
-    -- INSTANT hide (no macOS animation)
-    frontApp:hide()
+      -- INSTANT hide (no macOS animation)
+      frontApp:hide()
 
-    -- focus next window from other apps
-    local fallback = nil
-    for _, w in ipairs(hs.window.orderedWindows()) do
-      if w:application() ~= frontApp and not w:application():isHidden() then
-        fallback = w
-        break
+      -- focus next window from other apps
+      local fallback = nil
+      for _, w in ipairs(hs.window.orderedWindows()) do
+        if w:application() ~= frontApp and not w:application():isHidden() then
+          fallback = w
+          break
+        end
       end
-    end
 
-    if fallback then
-      fallback:focus()
-    end
-  end,
-  description = "Hide window and reveal next app window",
-},
-
-----------------------------------------------------------------------
--- Cmd-Shift-Up → RESTORE last hidden window instantly
-----------------------------------------------------------------------
-
-{
-  mods = { "cmd", "shift" },
-  key  = "up",
-  action = function(_, isDown)
-    if not isDown then return end
-
-    _G.minimizedStack = _G.minimizedStack or {}
-
-    while #_G.minimizedStack > 0 do
-      local w = table.remove(_G.minimizedStack) -- last pushed
-      local app = w and w:application()
-      if app then
-        app:unhide()   -- INSTANT
-        w:focus()      -- bring the window back
-        return
+      if fallback then
+        fallback:focus()
       end
-    end
+    end,
+    description = "Hide window and reveal next app window",
+  },
 
-    hs.alert.show("No hidden windows")
-  end,
-  description = "Instant restore of last hidden window",
-},
+  ----------------------------------------------------------------------
+  -- Cmd-Shift-Up → RESTORE last hidden window instantly
+  ----------------------------------------------------------------------
+
+  {
+    mods        = { "cmd", "shift" },
+    key         = "up",
+    action      = function(_, isDown)
+      if not isDown then return end
+
+      _G.minimizedStack = _G.minimizedStack or {}
+
+      while #_G.minimizedStack > 0 do
+        local w = table.remove(_G.minimizedStack) -- last pushed
+        local app = w and w:application()
+        if app then
+          app:unhide() -- INSTANT
+          w:focus()  -- bring the window back
+          return
+        end
+      end
+
+      hs.alert.show("No hidden windows")
+    end,
+    description = "Instant restore of last hidden window",
+  },
 
 } -- <<<--- keep this closing brace, nothing after it
 
@@ -305,14 +305,14 @@ end)
 ------------------------------------------------------------
 --  MOUSE HANDLING  — left Ctrl click becomes Cmd click
 ------------------------------------------------------------
-_G.leftCtrlDown  = _G.leftCtrlDown  or false
-_G.rightCtrlDown = _G.rightCtrlDown or false
+_G.leftCtrlDown          = _G.leftCtrlDown or false
+_G.rightCtrlDown         = _G.rightCtrlDown or false
 
 -- Track left vs right Ctrl keys explicitly, plus fn/globe key
 if _G.myActiveTaps.ctrlSideTap then _G.myActiveTaps.ctrlSideTap:stop() end
 _G.myActiveTaps.ctrlSideTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, function(e)
   local kc = e:getKeyCode()
-  if kc == 59 then -- left control
+  if kc == 59 then     -- left control
     _G.leftCtrlDown = e:getFlags().ctrl
   elseif kc == 62 then -- right control (also fn/globe key when mapped to Control)
     _G.rightCtrlDown = e:getFlags().ctrl
@@ -504,8 +504,8 @@ end)
 
 hs.window.animationDuration = 0
 
-local win    = hs.window
-local screen = hs.screen
+local win                   = hs.window
+local screen                = hs.screen
 
 ----------------------------------------------------------------------
 -- ORDERED SCREENS (left → right, then top → bottom)
@@ -548,9 +548,9 @@ local function cycleScreen(direction)
   local count = #screens
   local destIndex
   if direction == "right" then
-    destIndex = (currentIndex % count) + 1        -- forward wrap
+    destIndex = (currentIndex % count) + 1       -- forward wrap
   else
-    destIndex = ((currentIndex - 2) % count) + 1  -- backward wrap
+    destIndex = ((currentIndex - 2) % count) + 1 -- backward wrap
   end
 
   local dest = screens[destIndex]
@@ -564,10 +564,10 @@ end
 ----------------------------------------------------------------------
 
 local function isCenteredWindow(w)
-  local f = w:frame()
-  local s = w:screen():frame()
+  local f        = w:frame()
+  local s        = w:screen():frame()
 
-  local hRatio = f.h / s.h
+  local hRatio   = f.h / s.h
 
   -- window center vs screen center
   local fCenterX = f.x + f.w / 2
@@ -606,7 +606,6 @@ local function moveToGeometry(geom)
       -- second press: full-height left tile
       target = { x = s.x, y = s.y, w = s.w / 2, h = s.h }
     end
-
   elseif geom == "right" then
     if isCenteredWindow(w) then
       -- first press from centered: preserve height
@@ -620,13 +619,10 @@ local function moveToGeometry(geom)
       -- second press: full-height right tile
       target = { x = s.x + s.w / 2, y = s.y, w = s.w / 2, h = s.h }
     end
-
   elseif geom == "bottom" then
     target = { x = s.x, y = s.y + s.h / 2, w = s.w, h = s.h / 2 }
-
   elseif geom == "max" then
     target = s
-
   elseif geom == "centered" then
     local scale = 0.5
     local wSize = s.w * scale * 0.8
@@ -638,7 +634,6 @@ local function moveToGeometry(geom)
       w = wSize,
       h = hSize,
     }
-
   else
     return
   end
@@ -737,3 +732,140 @@ _G.myActiveTaps.keypadEnterRemap = hs_eventtap.new({ hs.eventtap.event.types.key
   end)
 _G.myActiveTaps.keypadEnterRemap:start()
 
+----------------------------------------------------------------------
+-- QUICKLINK APPS FOR RAYCAST (no need to setup Quicklinks in Raycast config)
+----------------------------------------------------------------------
+
+local home       = os.getenv("HOME")
+local configPath = home .. "/.quicklink-apps.json"
+local appDir     = home .. "/Applications/RaycastQuicklinks/"
+
+-- ensure folder exists
+os.execute("mkdir -p " .. string.format("%q", appDir))
+
+-- create empty config file if missing
+if not hs.fs.attributes(configPath) then
+  local f = io.open(configPath, "w")
+  f:write("{}")
+  f:close()
+  hs.alert.show("Created ~/.quicklink-apps.json — add quicklinks and reload Hammerspoon.")
+end
+
+-- load user links
+local function loadLinks()
+  local f = io.open(configPath, "r")
+  if not f then return {} end
+
+  local json = f:read("*a")
+  f:close()
+
+  local ok, data = pcall(hs.json.decode, json)
+  if not ok or type(data) ~= "table" then
+    hs.alert.show("Invalid JSON in ~/.quicklink-apps.json")
+    return {}
+  end
+
+  return data
+end
+
+local links = loadLinks()
+
+----------------------------------------------------------------------
+-- CLEANUP
+----------------------------------------------------------------------
+
+-- Collect desired app names
+local desiredNames = {}
+for name, _ in pairs(links) do
+  desiredNames[name .. ".app"] = true
+end
+
+-- Delete any .app in the directory that isn't in the config
+for file in hs.fs.dir(appDir) do
+  if file ~= "." and file ~= ".." and file:match("%.app$") then
+    if not desiredNames[file] then
+      local path = appDir .. file
+      os.execute("rm -rf " .. string.format("%q", path))
+    end
+  end
+end
+
+----------------------------------------------------------------------
+-- GENERATE APPS (supports per-link browser selection, faster)
+----------------------------------------------------------------------
+
+if next(links) == nil then
+  print("No quicklinks defined, nothing to generate.")
+  return
+end
+
+local function escape(str)
+  return str:gsub('"', '\\"')
+end
+
+local function markBackgroundOnly(appPath)
+  local plist  = appPath .. "/Contents/Info.plist"
+  local quoted = string.format("%q", plist)
+
+  os.execute(
+    '/usr/libexec/PlistBuddy -c "Set :LSBackgroundOnly true" ' ..
+    quoted .. ' 2>/dev/null || ' ..
+    '/usr/libexec/PlistBuddy -c "Add :LSBackgroundOnly bool true" ' ..
+    quoted .. ' 2>/dev/null'
+  )
+end
+
+for name, entry in pairs(links) do
+  local url
+  local browser
+
+  if type(entry) == "table" then
+    url     = entry.url
+    browser = entry.browser or nil
+  elseif type(entry) == "string" then
+    url     = entry
+    browser = nil
+  else
+    print("Invalid link entry for:", name)
+    goto continue
+  end
+
+  local appPath    = appDir .. name .. ".app"
+  local scriptPath = appDir .. name .. ".applescript"
+
+  -- Build AppleScript depending on browser
+  local script
+  if browser then
+    -- Faster: use `open -a "<Browser>" "<URL>"` instead of Apple Events
+    script = string.format(
+      'do shell script "open -a \\"%s\\" \\"%s\\""',
+      escape(browser),
+      escape(url)
+    )
+  else
+    -- default browser via open
+    script = string.format(
+      'do shell script "open \\"%s\\""',
+      escape(url)
+    )
+  end
+
+  -- write AppleScript
+  local f = io.open(scriptPath, "w")
+  if f then
+    f:write(script)
+    f:close()
+
+    -- compile to .app
+    os.execute(
+      "osacompile -o " ..
+      string.format("%q", appPath) .. " " ..
+      string.format("%q", scriptPath)
+    )
+
+    -- trim launch overhead: background-only helper app
+    markBackgroundOnly(appPath)
+  end
+
+  ::continue::
+end
