@@ -732,32 +732,41 @@ _G.myActiveTaps.keypadEnterRemap = hs_eventtap.new({ hs.eventtap.event.types.key
   end)
 _G.myActiveTaps.keypadEnterRemap:start()
 
+
 ----------------------------------------------------------------------
--- QUICKLINK APPS FOR RAYCAST (no need to setup Quicklinks in Raycast config)
+-- QUICKLINK APPS FOR RAYCAST (JSON-driven, with cleanup + icons)
+--  - Config: ~/.quicklink-apps.json
+--  - Output apps: ~/Applications/RaycastQuicklinks/*.app
 ----------------------------------------------------------------------
 
-local home       = os.getenv("HOME")
+local home       = os.getenv("HOME") or ""
 local configPath = home .. "/.quicklink-apps.json"
 local appDir     = home .. "/Applications/RaycastQuicklinks/"
 
--- ensure folder exists
+-- Ensure app dir exists
 os.execute("mkdir -p " .. string.format("%q", appDir))
 
--- create empty config file if missing
+-- Create empty config if missing
 if not hs.fs.attributes(configPath) then
   local f = io.open(configPath, "w")
-  f:write("{}")
-  f:close()
+  if f then
+    f:write("{}")
+    f:close()
+  end
   hs.alert.show("Created ~/.quicklink-apps.json — add quicklinks and reload Hammerspoon.")
 end
 
--- load user links
+-- Load user-defined quicklinks (name -> string | table)
 local function loadLinks()
   local f = io.open(configPath, "r")
   if not f then return {} end
 
-  local json = f:read("*a")
+  local json = f:read("*a") or ""
   f:close()
+
+  if json == "" then
+    return {}
+  end
 
   local ok, data = pcall(hs.json.decode, json)
   if not ok or type(data) ~= "table" then
@@ -769,103 +778,280 @@ local function loadLinks()
 end
 
 local links = loadLinks()
-
-----------------------------------------------------------------------
--- CLEANUP
-----------------------------------------------------------------------
-
--- Collect desired app names
-local desiredNames = {}
-for name, _ in pairs(links) do
-  desiredNames[name .. ".app"] = true
+if type(links) ~= "table" or not next(links) then
+  print("[quicklinks] No quicklinks defined, nothing to generate.")
+  return
 end
 
--- Delete any .app in the directory that isn't in the config
+----------------------------------------------------------------------
+-- DEPENDENCY: fileicon (auto-install via Homebrew if possible)
+----------------------------------------------------------------------
+
+local function findExecutable(candidates)
+  for _, p in ipairs(candidates) do
+    if hs.fs.attributes(p) then
+      return p
+    end
+  end
+  return nil
+end
+
+local function ensureFileicon()
+  -- 1) Already installed?
+  local existing = findExecutable({
+    "/opt/homebrew/bin/fileicon",
+    "/usr/local/bin/fileicon",
+    "/usr/bin/fileicon",
+  })
+  if existing then return existing end
+
+  -- 2) Try to install via Homebrew
+  local brew = findExecutable({
+    "/opt/homebrew/bin/brew",
+    "/usr/local/bin/brew",
+  })
+
+  if not brew then
+    hs.alert.show("Quicklinks: Homebrew not found; cannot install 'fileicon'.")
+    return nil
+  end
+
+  hs.alert.show("Quicklinks: installing 'fileicon' via Homebrew...")
+
+  local cmd = string.format('%q install fileicon >/dev/null 2>&1', brew)
+  local ok = os.execute(cmd)
+
+  if not ok then
+    hs.alert.show("Quicklinks: failed to install 'fileicon'.")
+    return nil
+  end
+
+  -- 3) Re-resolve after install
+  local installed = findExecutable({
+    "/opt/homebrew/bin/fileicon",
+    "/usr/local/bin/fileicon",
+    "/usr/bin/fileicon",
+  })
+
+  if not installed then
+    hs.alert.show("Quicklinks: 'fileicon' still missing after install.")
+    return nil
+  end
+
+  hs.alert.show("Quicklinks: 'fileicon' installed.")
+  return installed
+end
+
+local FILEICON = ensureFileicon()
+if not FILEICON then
+  print("[quicklinks] 'fileicon' CLI not available; quicklink apps will have generic icons.")
+end
+
+----------------------------------------------------------------------
+-- HELPERS
+----------------------------------------------------------------------
+
+
+local function escapeShell(str)
+  return string.format("%q", str)
+end
+
+local function plistEscape(str)
+  str = tostring(str or "")
+  str = str:gsub("&", "&amp;")
+  str = str:gsub("<", "&lt;")
+  str = str:gsub(">", "&gt;")
+  return str
+end
+
+-- Fetch favicon and cache as PNG under appDir/Icons/<host>.png
+local function ensureFaviconPng(url)
+  local host = url:match("^https?://([^/%?]+)")
+  if not host then return nil end
+
+  local iconCacheDir = appDir .. "Icons/"
+  os.execute("mkdir -p " .. escapeShell(iconCacheDir))
+
+  local pngPath = iconCacheDir .. host .. ".png"
+  if hs.fs.attributes(pngPath) then
+    return pngPath
+  end
+
+  local scheme = url:match("^(https?)://") or "https"
+
+  -- 1) Try direct favicon.ico on the host
+  local faviconUrl = scheme .. "://" .. host .. "/favicon.ico"
+  local code, body = hs.http.get(faviconUrl)
+
+  -- 2) Fallback to Google favicon service if needed
+  if code ~= 200 or not body or #body == 0 then
+    local fallback = "https://www.google.com/s2/favicons?sz=128&domain=" .. host
+    code, body = hs.http.get(fallback)
+  end
+
+  if code ~= 200 or not body or #body == 0 then
+    print("[quicklinks] Failed to fetch favicon for", host, "status:", code)
+    return nil
+  end
+
+  local f = io.open(pngPath, "wb")
+  if not f then
+    print("[quicklinks] Failed to write favicon PNG for", host)
+    return nil
+  end
+
+  f:write(body)
+  f:close()
+  return pngPath
+end
+
+-- Set app icon via fileicon (uses favicon or explicit icon override)
+local function setAppIcon(appPath, url, iconOverride)
+  if not FILEICON then return end
+
+  local source = iconOverride
+  if source and source:sub(1, 1) == "~" then
+    source = home .. source:sub(2)
+  end
+
+  if not source then
+    source = ensureFaviconPng(url)
+  end
+
+  if not source or not hs.fs.attributes(source) then
+    return
+  end
+
+  local cmd = string.format(
+    "%s set %s %s >/dev/null 2>&1",
+    escapeShell(FILEICON),
+    escapeShell(appPath),
+    escapeShell(source)
+  )
+  os.execute(cmd)
+end
+
+----------------------------------------------------------------------
+-- CLEANUP OLD APPS
+----------------------------------------------------------------------
+
+local desired = {}
+for name, _ in pairs(links) do
+  desired[name .. ".app"] = true
+end
+
 for file in hs.fs.dir(appDir) do
   if file ~= "." and file ~= ".." and file:match("%.app$") then
-    if not desiredNames[file] then
+    if not desired[file] then
       local path = appDir .. file
-      os.execute("rm -rf " .. string.format("%q", path))
+      os.execute("rm -rf " .. escapeShell(path))
     end
   end
 end
 
 ----------------------------------------------------------------------
--- GENERATE APPS (supports per-link browser selection, faster)
+-- BUNDLE CREATION (minimal .app with shell script executable)
 ----------------------------------------------------------------------
 
-if next(links) == nil then
-  print("No quicklinks defined, nothing to generate.")
-  return
+local function makeBundle(name, url, browser)
+  local appPath   = appDir .. name .. ".app"
+  local contents  = appPath .. "/Contents"
+  local macOSDir  = contents .. "/MacOS"
+
+  os.execute("mkdir -p " .. escapeShell(macOSDir))
+
+  local exeName   = "run"
+  local exePath   = macOSDir .. "/" .. exeName
+
+  -- tiny helper for double-quote escaping in the script
+  local function dq(s)
+    return (s or ""):gsub('"', '\\"')
+  end
+
+  -- launcher script: open URL, optionally in specific browser
+  local f = io.open(exePath, "w")
+  if not f then
+    print("[quicklinks] Failed to write launcher for", name)
+    return nil
+  end
+
+  f:write("#!/bin/bash\n")
+  f:write("open ")
+  if browser and browser ~= "" then
+    f:write('-a "' .. dq(browser) .. '" ')
+  end
+  f:write('"' .. dq(url) .. '"\n')
+  f:close()
+
+  os.execute("chmod +x " .. escapeShell(exePath))
+
+  -- Info.plist (minimal, plus background-only)
+  local plistPath = contents .. "/Info.plist"
+  local bundleId  = "local.raycastquicklink." .. name:gsub("[^%w%.%-]", "-")
+
+  local plist = [[<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>]] .. plistEscape(name) .. [[</string>
+  <key>CFBundleDisplayName</key>
+  <string>]] .. plistEscape(name) .. [[</string>
+  <key>CFBundleIdentifier</key>
+  <string>]] .. plistEscape(bundleId) .. [[</string>
+  <key>CFBundleVersion</key>
+  <string>1.0</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleExecutable</key>
+  <string>]] .. exeName .. [[</string>
+  <key>LSBackgroundOnly</key>
+  <true/>
+</dict>
+</plist>
+]]
+
+  local pf = io.open(plistPath, "w")
+  if pf then
+    pf:write(plist)
+    pf:close()
+  end
+
+  return appPath
 end
 
-local function escape(str)
-  return str:gsub('"', '\\"')
-end
-
-local function markBackgroundOnly(appPath)
-  local plist  = appPath .. "/Contents/Info.plist"
-  local quoted = string.format("%q", plist)
-
-  os.execute(
-    '/usr/libexec/PlistBuddy -c "Set :LSBackgroundOnly true" ' ..
-    quoted .. ' 2>/dev/null || ' ..
-    '/usr/libexec/PlistBuddy -c "Add :LSBackgroundOnly bool true" ' ..
-    quoted .. ' 2>/dev/null'
-  )
-end
+----------------------------------------------------------------------
+-- GENERATE / REFRESH APPS
+----------------------------------------------------------------------
 
 for name, entry in pairs(links) do
   local url
   local browser
+  local iconOverride
 
   if type(entry) == "table" then
-    url     = entry.url
-    browser = entry.browser or nil
+    url          = entry.url
+    browser      = entry.browser
+    iconOverride = entry.icon
   elseif type(entry) == "string" then
-    url     = entry
-    browser = nil
+    url = entry
   else
-    print("Invalid link entry for:", name)
+    print("[quicklinks] Invalid link entry for:", name)
     goto continue
   end
 
-  local appPath    = appDir .. name .. ".app"
-  local scriptPath = appDir .. name .. ".applescript"
-
-  -- Build AppleScript depending on browser
-  local script
-  if browser then
-    -- Faster: use `open -a "<Browser>" "<URL>"` instead of Apple Events
-    script = string.format(
-      'do shell script "open -a \\"%s\\" \\"%s\\""',
-      escape(browser),
-      escape(url)
-    )
-  else
-    -- default browser via open
-    script = string.format(
-      'do shell script "open \\"%s\\""',
-      escape(url)
-    )
-  end
-
-  -- write AppleScript
-  local f = io.open(scriptPath, "w")
-  if f then
-    f:write(script)
-    f:close()
-
-    -- compile to .app
-    os.execute(
-      "osacompile -o " ..
-      string.format("%q", appPath) .. " " ..
-      string.format("%q", scriptPath)
-    )
-
-    -- trim launch overhead: background-only helper app
-    markBackgroundOnly(appPath)
+  if url and url ~= "" then
+    local appPath = makeBundle(name, url, browser)
+    if appPath then
+      setAppIcon(appPath, url, iconOverride)
+      -- poke the bundle so Finder / Raycast notice icon changes
+      os.execute("touch " .. escapeShell(appPath))
+    end
   end
 
   ::continue::
 end
+
+hs.alert.show("Windows-like remap initialized")
