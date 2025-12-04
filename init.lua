@@ -151,6 +151,20 @@ local GLOBAL_SHORTCUTS = {
     description = "Instant restore of last hidden window",
   },
 
+  ----------------------------------------------------------------------
+  -- Cmd-. → Emoji picker (sends Ctrl+Cmd+Space)
+  ----------------------------------------------------------------------
+
+  {
+    mods        = { "cmd" },
+    key         = ".",
+    action      = function(_, isDown)
+      if not isDown then return end
+      hs.eventtap.keyStroke({ "ctrl", "cmd" }, "space", 0)
+    end,
+    description = "Emoji picker",
+  },
+
 } -- <<<--- keep this closing brace, nothing after it
 
 
