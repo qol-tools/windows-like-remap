@@ -1,5 +1,4 @@
-hs.window.animationDuration = 0
-
+------------------------------------------------------------
 --  CONFIG  ------------------------------------------------
 ------------------------------------------------------------
 local hs_app = require "hs.application"
@@ -10,6 +9,72 @@ local hs_alert = require "hs.alert"
 local hs_fnutils = require "hs.fnutils"
 local hs_logger = require "hs.logger"
 local hs_mouse = require "hs.mouse"
+local hasAX, hs_ax = pcall(require, "hs.axuielement")
+
+------------------------------------------------------------
+--  AX ENHANCED UI KILLER (stops slow resize animations)
+------------------------------------------------------------
+function withNoEnhancedUI(w, fn)
+  if not fn then return end
+  if not hasAX or not w or not w.application then
+    fn()
+    return
+  end
+
+  local ok, axApp = pcall(hs_ax.applicationElement, w:application())
+  if not ok or not axApp then
+    fn()
+    return
+  end
+
+  local wasEnhanced = axApp.AXEnhancedUserInterface
+  if wasEnhanced then axApp.AXEnhancedUserInterface = false end
+
+  fn()
+
+  if wasEnhanced then axApp.AXEnhancedUserInterface = true end
+end
+
+
+------------------------------------------------------------
+--  GLOBAL macOS ANIMATION KILL-SWITCH (Raycast-style)
+------------------------------------------------------------
+-- This applies the same kind of defaults many tilers / power users use
+-- to strip as many system animations as macOS currently allows.
+local function disableGlobalAnimations()
+  local cmds = {
+    -- General window / sheet / resize animations
+    'defaults write -g NSAutomaticWindowAnimationsEnabled -bool false',
+    'defaults write -g NSWindowResizeTime -float 0.001',
+    'defaults write -g QLPanelAnimationDuration -float 0',
+    'defaults write -g NSScrollAnimationEnabled -bool false',
+    'defaults write -g NSScrollViewRubberbanding -bool false',
+    'defaults write -g NSDocumentRevisionsWindowTransformAnimation -bool false',
+    'defaults write -g NSToolbarFullScreenAnimationDuration -float 0',
+    'defaults write -g NSBrowserColumnAnimationSpeedMultiplier -float 0',
+
+    -- “Reduce motion” everywhere
+    'defaults write NSGlobalDomain ReduceMotionEnabled -bool true',
+
+    -- Dock / Mission Control / Launchpad timing
+    'defaults write com.apple.dock autohide-time-modifier -float 0',
+    'defaults write com.apple.dock autohide-delay -float 0',
+    'defaults write com.apple.dock expose-animation-duration -float 0',
+    'defaults write com.apple.dock springboard-show-duration -float 0',
+    'defaults write com.apple.dock springboard-hide-duration -float 0',
+    'defaults write com.apple.dock springboard-page-duration -float 0',
+  }
+
+  for _, c in ipairs(cmds) do
+    os.execute(c .. ' >/dev/null 2>&1')
+  end
+
+  -- Needed for a bunch of Dock-related keys to apply
+  os.execute('killall Dock >/dev/null 2>&1')
+end
+
+disableGlobalAnimations()
+
 
 -- Ensure our global table for taps exists
 _G.myActiveTaps = _G.myActiveTaps or {}
@@ -86,11 +151,10 @@ _G.kittyFastTap:start()
 _G.minimizedStack = _G.minimizedStack or {} -- keep only one copy
 
 local GLOBAL_SHORTCUTS = {
-  -- Cmd‑Shift‑Down  → minimise front window, reveal first other‑app window
+  
   ----------------------------------------------------------------------
   -- Cmd-Shift-Down → HIDE window + reveal next app window
   ----------------------------------------------------------------------
-
   {
     mods        = { "cmd", "shift" },
     key         = "down",
@@ -99,58 +163,78 @@ local GLOBAL_SHORTCUTS = {
 
       local front = hs.window.frontmostWindow()
       if not front then return end
-      local frontApp = front:application()
 
-      -- store window id so we can restore later
-      _G.minimizedStack = _G.minimizedStack or {}
-      table.insert(_G.minimizedStack, front)
+      -- store window + original space
+      _G.hiddenWindows = _G.hiddenWindows or {}
+      local currentSpace = hs.spaces.focusedSpace()
+      table.insert(_G.hiddenWindows, { window = front, space = currentSpace })
 
-      -- INSTANT hide (no macOS animation)
-      frontApp:hide()
-
-      -- focus next window from other apps
-      local fallback = nil
-      for _, w in ipairs(hs.window.orderedWindows()) do
-        if w:application() ~= frontApp and not w:application():isHidden() then
-          fallback = w
-          break
+      -- find a different space to banish the window to
+      local allSpaces = hs.spaces.allSpaces()
+      local targetSpace = nil
+      for _, spaces in pairs(allSpaces) do
+        for _, spaceID in ipairs(spaces) do
+          if spaceID ~= currentSpace then
+            targetSpace = spaceID
+            break
+          end
         end
+        if targetSpace then break end
       end
 
-      if fallback then
-        fallback:focus()
+      if targetSpace then
+        -- move window to different space (instant, invisible)
+        hs.spaces.moveWindowToSpace(front, targetSpace)
+      else
+        -- fallback: still only this window, but avoid Enhanced UI animations if possible
+        withNoEnhancedUI(front, function()
+          front:minimize()
+        end)
       end
+
+      -- focus next window
+      hs.timer.doAfter(0.01, function()
+        local windows = hs.window.orderedWindows()
+        for _, w in ipairs(windows) do
+          if w ~= front then
+            w:focus()
+            break
+          end
+        end
+      end)
     end,
-    description = "Hide window and reveal next app window",
+    description = "Instant hide current window",
   },
 
   ----------------------------------------------------------------------
   -- Cmd-Shift-Up → RESTORE last hidden window instantly
   ----------------------------------------------------------------------
-
   {
     mods        = { "cmd", "shift" },
     key         = "up",
     action      = function(_, isDown)
       if not isDown then return end
 
-      _G.minimizedStack = _G.minimizedStack or {}
+      _G.hiddenWindows = _G.hiddenWindows or {}
 
-      while #_G.minimizedStack > 0 do
-        local w = table.remove(_G.minimizedStack) -- last pushed
-        local app = w and w:application()
-        if app then
-          app:unhide() -- INSTANT
-          w:focus()  -- bring the window back
+      while #_G.hiddenWindows > 0 do
+        local entry = table.remove(_G.hiddenWindows)
+        local w = entry and entry.window
+        local space = entry and entry.space
+        if w then
+          -- move window back to original space and focus
+          if space then
+            hs.spaces.moveWindowToSpace(w, space)
+          end
+          w:focus()
           return
         end
       end
 
       hs.alert.show("No hidden windows")
     end,
-    description = "Instant restore of last hidden window",
+    description = "Instant restore last hidden window",
   },
-
   ----------------------------------------------------------------------
   -- Cmd-. → Emoji picker (sends Ctrl+Cmd+Space)
   ----------------------------------------------------------------------
@@ -512,6 +596,8 @@ _G.myActiveTaps.scrollTap = hs_eventtap.new({ hs_eventtap.event.types.scrollWhee
 end)
 
 
+
+
 ----------------------------------------------------------------------
 -- WINDOW MOVEMENT / RESIZING  (Instant, no animations)
 ----------------------------------------------------------------------
@@ -570,7 +656,9 @@ local function cycleScreen(direction)
   local dest = screens[destIndex]
   if not dest then return end
 
-  w:moveToScreen(dest, false, false) -- instant
+  withNoEnhancedUI(w, function()
+    w:moveToScreen(dest, false, false) -- instant, no accessibility animation
+  end)
 end
 
 ----------------------------------------------------------------------
@@ -652,9 +740,10 @@ local function moveToGeometry(geom)
     return
   end
 
-  w:setFrame(target, 0) -- instant
+  withNoEnhancedUI(w, function()
+    w:setFrame(target, 0) -- instant
+  end)
 end
-
 
 ----------------------------------------------------------------------
 -- KEYBINDS
@@ -683,7 +772,17 @@ end)
 hs.hotkey.bind({ "cmd" }, "up", function()
   moveToGeometry("max")
 end)
+------------------------------------------------------------
+--  PER-WINDOW MINIMIZE (override ⌘⌥M)
+------------------------------------------------------------
+hs.hotkey.bind({ "cmd", "shift" }, "down", function()
+  local w = hs.window.frontmostWindow()
+  if not w then return end
 
+  withNoEnhancedUI(w, function()
+    w:minimize()
+  end)
+end)
 
 ------------------------------------------------------------
 --  START TAPS & WATCHER  ----------------------------------
